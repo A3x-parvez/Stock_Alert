@@ -1,0 +1,5 @@
+Stock_price_V1.py
+Stock_price_V2.py
+.venv/
+keys.py
+__pycache__/

@@ -132,7 +132,7 @@ The current version (V3) is available and serves as a simple, straightforward pr
 If you have any questions, feedback, or suggestions, feel free to reach out!
  - **LinkedIn :**  [Rijwanool Karim](https://www.linkedin.com/in/rijwanool-karim-89b6b5255?utm_source=share&utm_campaign=share_via&utm_content=profile&utm_medium=android_app) 
  - **GitHub :** [A3x-parvez](https://github.com/A3x-parvez)
- - **Email :** [Parvez](rijwanoolkarim143r@gmail.com)
+ - **Email :** rijwanoolkarim143r@gmail.com
 
 
 

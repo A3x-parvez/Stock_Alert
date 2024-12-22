@@ -64,7 +64,7 @@ This project is a stock price tracker and alert bot for any  `ex:BPCL (Bharat Pe
 
 4. **Create a `keys.py` File :**
    
-     Inside the project directory, create a keys.py file with the following content:
+     Inside the project directory, create a `keys.py` file with the following content:
      ```bash
      BOT_API = "your_telegram_bot_api_token"
      CHAT_ID = "your_telegram_chat_id"

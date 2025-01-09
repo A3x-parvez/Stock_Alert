@@ -2,23 +2,46 @@ import requests
 import time
 import schedule
 from bs4 import BeautifulSoup
-from flask import Flask, request
-
-app = Flask(__name__)
+import telebot
+import threading
+import keys
 
 # Telegram bot setup
-bot_token = "YOUR_BOT_TOKEN"
-chat_id = None
-symbol = None
-interval = None
-job_running = False
+bot_token = keys.BOT_API
 
-def send_telegram(message):
-    """Send a message via Telegram bot."""
+# Initialize the Telegram bot engine using the provided token.
+bot = telebot.TeleBot(bot_token)
+
+# Global dictionary to store user data and threads
+user_data = {}
+user_threads = {}
+chat_id = ""
+
+# Function to fetch the stock price
+def get_stock_price(symbol):
+    url = f"https://www.google.com/finance/quote/{symbol}:NSE"
+    print(f"Fetching stock price for {symbol} from: {url}")
+
+    response = requests.get(url)
+    print(f"Fetching stock price for {symbol}... Status Code: {response.status_code}")
+    soup = BeautifulSoup(response.text, 'html.parser')
+    class1 = "YMlKec fxKbKc"
+    p = soup.find(class_=class1).text.strip()[1:].replace(',', '')
+    price = float(p)
+    if response.status_code == 200:
+        return price
+    else:
+        print("Something went wrong.")
+        return None
+
+# Function to send message to Telegram user
+def send_telegram(chat_id, message):
     try:
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         data = {"chat_id": chat_id, "text": message}
         response = requests.post(url, data=data)
+        print(f"Sending message... Status Code: {response.status_code}")
+        
         if response.status_code == 200:
             print("Message sent successfully.")
         else:
@@ -26,73 +49,128 @@ def send_telegram(message):
     except Exception as e:
         print(f"Exception occurred while sending message: {e}")
 
-def get_stock_price(symbol):
-    """Fetch the stock price of the given symbol from Google Finance."""
-    try:
-        url = f"https://www.google.com/finance/quote/{symbol}:NSE"
-        response = requests.get(url)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        class1 = "YMlKec fxKbKc"
-        p = soup.find(class_=class1).text.strip()[1:].replace(',', '')
-        return float(p)
-    except Exception as e:
-        print(f"Error fetching stock price: {e}")
-        return None
+# Function to start the scheduler in a new thread for each user
+def start_schedule(chat_id, stock_name, duration):
+    # Prevent duplicate job creation if already running
+    if chat_id in user_threads and user_threads[chat_id].is_alive():
+        send_telegram(chat_id, "A stock tracker is already running. Please stop the current tracker first.")
+        return
 
-def job():
-    """Scheduled job to fetch stock price and send a message."""
-    global symbol
-    price = get_stock_price(symbol)
-    if price:
-        message = f"🔔 Current 💲 price of {symbol}:NSE is : {price}/-\nThank you 😊."
-        send_telegram(message)
-    else:
-        send_telegram("Error: Unable to retrieve stock price.")
+    # Schedule the job to run every 'duration' minutes
+    job_id = schedule.every(duration / 6).minutes.do(job, chat_id, stock_name)
+    
+    # Running the scheduler in a separate thread so it doesn't block other bot interactions
+    user_threads[chat_id] = threading.Thread(target=run_scheduler)
+    user_threads[chat_id].start()
 
-@app.route(f"/{bot_token}", methods=["POST"])
-def telegram_webhook():
-    global chat_id, symbol, interval, job_running
+    send_telegram(chat_id, f"Stock tracker started for {stock_name} with updates every {duration} minutes.")
 
-    data = request.json
-    if "message" in data:
-        chat_id = data["message"]["chat"]["id"]
-        text = data["message"].get("text", "").strip().lower()
-
-        if text == "/start":
-            send_telegram("Welcome! Please enter the stock symbol (e.g., BPCL):")
-        elif symbol is None:  # Waiting for stock symbol
-            symbol = text.upper()
-            send_telegram(f"Got it! Tracking stock: {symbol}. Now, enter the interval time in seconds:")
-        elif interval is None:  # Waiting for interval time
-            try:
-                interval = int(text)
-                send_telegram(f"Interval set to {interval} seconds. Starting stock price tracking...")
-                schedule.every(interval).seconds.do(job).tag("stock_tracking")
-                job_running = True
-            except ValueError:
-                send_telegram("Invalid interval. Please enter a valid number in seconds.")
-        elif text == "/stop":
-            schedule.clear("stock_tracking")
-            job_running = False
-            symbol = None
-            interval = None
-            send_telegram("Stock price tracking stopped. Send /start to begin again.")
-
-    return "OK", 200
-
+# Running the scheduler
 def run_scheduler():
-    """Run the scheduler in the background."""
     while True:
         schedule.run_pending()
         time.sleep(1)
 
-if __name__ == "__main__":
-    from threading import Thread
+# The job function that sends the stock price update
+def job(chat_id, stock_name):
+    # Fetch the new stock price
+    price = get_stock_price(stock_name)
 
-    # Start the scheduler in a separate thread
-    scheduler_thread = Thread(target=run_scheduler)
-    scheduler_thread.daemon = True
-    scheduler_thread.start()
+    if price is not None:
+        # Get the previous stock price for comparison
+        if chat_id in user_data and 'old_price' in user_data[chat_id]:
+            old_price = user_data[chat_id]['old_price']
+        else:
+            old_price = price  # If no old price exists, consider the current price as old
+        
+        # Store the current price as the new old price for the next check
+        user_data[chat_id]['old_price'] = price
+        
+    if old_price < price:
+        emoji = "🔺"
+    elif old_price == price:
+        emoji = "🔷"
+    else:
+        emoji = "🔻"
+        
+    old_price = price
+    
+    if price:
+        message = f"🔔 Current 💲 price of {stock_name}:NSE is : {price}/- {emoji}\nThank you😊."
+    else:
+        message = "Error: Unable to retrieve stock price."
+    send_telegram(chat_id, message)
 
-    # Start Flask app to handle Telegram webhook
-    app.run(port=5000)
+# Handling the '/start' command
+@bot.message_handler(commands=['start'])
+def start(message):
+    chat_id = message.chat.id
+    # Initialize user state
+    user_data[chat_id] = {"step": "ask_stock", "stock_name": None, "time_duration": None}
+    bot.send_message(chat_id, "Welcome! Please enter the stock name you want to track (e.g., BPCL).")
+
+# Handling the '/stop' command
+@bot.message_handler(commands=['stop'])
+def stop(message):
+    chat_id = message.chat.id
+    if chat_id in user_data:
+        # Clear any scheduled jobs for the user
+        if chat_id in user_threads:
+            if user_threads[chat_id].is_alive():
+                print(f"Stopping scheduler for chat_id {chat_id}.")
+                schedule.clear()  # Clear all scheduled jobs
+                print(f"Waiting for thread to finish for chat_id {chat_id}.")
+                user_threads[chat_id].join(1)  # Wait for the thread to finish
+                print(f"Thread finished for chat_id {chat_id}.")
+            user_threads.pop(chat_id)  # Remove the thread from the manager
+            print(f"Thread removed for chat_id {chat_id}.")
+        
+        # Reset all user data
+        user_data[chat_id] = {"step": "ask_stock", "stock_name": None, "time_duration": None}
+        print(f"User data reset for chat_id {chat_id}.")
+        print(f"User threads: {user_threads}")
+        # Inform the user that the stock tracker has been stopped
+        send_telegram(chat_id, "The stock tracker has been stopped. All data is reset.")
+    else:
+        send_telegram(chat_id, "You haven't started tracking a stock yet.")
+
+# Handling any user input
+@bot.message_handler(func=lambda message: True)
+def handle_message(message):
+    chat_id = message.chat.id
+    text = message.text.strip()
+
+    # If the user is not yet tracked, initialize user state
+    if chat_id not in user_data:
+        user_data[chat_id] = {"step": "ask_stock", "stock_name": None, "time_duration": None}
+
+    state = user_data[chat_id]
+
+    if state["step"] == "ask_stock":
+        # Store the stock name and ask for the time duration
+        state["stock_name"] = text
+        state["step"] = "ask_duration"
+        bot.send_message(chat_id, f"Stock name set to {text}. Please enter the update interval in minutes.")
+    elif state["step"] == "ask_duration":
+        try:
+            # Validate and store the time duration
+            time_duration = int(text)
+            state["time_duration"] = time_duration
+            state["step"] = "complete"
+            bot.send_message(chat_id, f"Update interval set to {time_duration} minutes.")
+            
+            # Start the scheduler
+            start_schedule(chat_id, state['stock_name'], state['time_duration'])
+        except ValueError:
+            # Handle invalid time input
+            bot.send_message(chat_id, "Invalid input. Please enter a valid number for the time duration.")
+    else:
+        bot.send_message(chat_id, "You have already provided the required details. Use /start to reset.")
+
+# Main function to keep the bot running
+def main():
+    print("Bot is running...")
+    bot.polling()
+
+if __name__ == '__main__':
+    main()
